@@ -91,6 +91,7 @@ desktop = [
     "pydantic>=2.0",
     "python-multipart>=0.0.9",
     "faster-whisper>=1.0",
+    "openjarvis-rust",
     # JARVIS voice (local Kokoro TTS). Listed here so the desktop app's
     # `uv sync --extra desktop` keeps them — otherwise the sync prunes any
     # ad-hoc-installed kokoro and /v1/speech/tts 500s ("No module named 'kokoro'").
@@ -190,6 +191,9 @@ git_describe_command = [
 # hard-fail the build. Mirror the runtime sentinel in src/openjarvis/__init__.py.
 # Such builds can inject the real version via SETUPTOOLS_SCM_PRETEND_VERSION.
 fallback_version = "0.0.0+unknown"
+
+[tool.uv.sources]
+openjarvis-rust = { path = "rust/crates/openjarvis-python" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openjarvis"]
