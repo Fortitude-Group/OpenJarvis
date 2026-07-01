@@ -910,6 +910,56 @@ async def transcribe_speech(request: Request):
     }
 
 
+@speech_router.post("/tts")
+async def synthesize_speech(request: Request):
+    """Synthesize text to speech and return audio bytes (local Kokoro by default).
+
+    Body: {"text": "...", "voice": "bm_george", "speed": 1.0, "format": "wav"}
+    """
+    from fastapi import Response
+
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    voice = body.get("voice") or "bm_george"
+    speed = float(body.get("speed") or 1.0)
+    fmt = body.get("format") or "wav"
+    if not text:
+        return Response(status_code=204)
+
+    # Lazily build + cache a TTS backend on app.state. Prefer a premium cloud voice
+    # (ElevenLabs — natural, JARVIS-like, no mid-sentence artifacts) when its key is
+    # configured; otherwise fall back to fully-local Kokoro.
+    import os
+
+    backend = getattr(request.app.state, "tts_backend", None)
+    if backend is None:
+        import openjarvis.speech  # noqa: F401  registers TTS backends
+        from openjarvis.core.registry import TTSRegistry
+
+        if os.environ.get("ELEVENLABS_API_KEY") and TTSRegistry.contains("elevenlabs"):
+            key = "elevenlabs"
+        elif TTSRegistry.contains("kokoro"):
+            key = "kokoro"
+        else:
+            raise HTTPException(
+                status_code=501,
+                detail="No TTS backend available (set ELEVENLABS_API_KEY, or pip install kokoro)",
+            )
+        backend = TTSRegistry.get(key)()
+        request.app.state.tts_backend = backend
+
+    try:
+        result = backend.synthesize(text, voice_id=voice, speed=speed, output_format=fmt)
+    except Exception as exc:
+        logger.exception("TTS synthesis failed")
+        raise HTTPException(status_code=500, detail=f"TTS failed: {exc}") from exc
+
+    # Honour the backend's actual output format (ElevenLabs returns mp3, Kokoro wav).
+    out_fmt = result.format or fmt
+    media = "audio/wav" if out_fmt == "wav" else ("audio/mpeg" if out_fmt == "mp3" else f"audio/{out_fmt}")
+    return Response(content=result.audio, media_type=media)
+
+
 @speech_router.get("/health")
 async def speech_health(request: Request):
     """Check if a speech backend is available."""

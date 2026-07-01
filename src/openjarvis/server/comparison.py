@@ -300,6 +300,10 @@ const CLOUD_PRICING = {
     input_per_1m: 5.00, output_per_1m: 25.00,
     label: "Claude Opus 4.6"
   },
+  "claude-sonnet-4-6": {
+    input_per_1m: 3.00, output_per_1m: 15.00,
+    label: "Claude Sonnet 4.6"
+  },
   "gemini-3.1-pro": {
     input_per_1m: 2.00, output_per_1m: 12.00,
     label: "Gemini 3.1 Pro"

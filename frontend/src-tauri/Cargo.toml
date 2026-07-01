@@ -35,6 +35,9 @@ keyring = { version = "3", features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# Used to auto-grant the WebView2 microphone permission for the HUD overlay
+# (WebView2 denies getUserMedia by default unless the host handles the request).
+webview2-com = "0.38"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Blocking Secret Service backend (no internal async runtime, so it is safe to

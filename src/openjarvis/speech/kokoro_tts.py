@@ -22,19 +22,31 @@ class KokoroTTSBackend(TTSBackend):
     def __init__(self, *, model_path: str = "", device: str = "auto") -> None:
         self._model_path = model_path
         self._device = device
-        self._pipeline = None
+        self._pipelines: dict = {}
 
-    def _ensure_pipeline(self) -> None:
-        if self._pipeline is not None:
-            return
+    # Kokoro voice ids are prefixed by language/region: "a*" = US English,
+    # "b*" = British English (plus e/f/h/i/j/p/z for other languages). The
+    # pipeline's lang_code drives phonemization, so it must match the voice's
+    # prefix — otherwise a British voice is given American pronunciation (and
+    # Kokoro logs a mismatch warning).
+    @staticmethod
+    def _lang_for_voice(voice_id: str) -> str:
+        prefix = voice_id[0] if voice_id else "a"
+        return prefix if prefix in {"a", "b", "e", "f", "h", "i", "j", "p", "z"} else "a"
+
+    def _ensure_pipeline(self, lang_code: str = "a"):
+        pipeline = self._pipelines.get(lang_code)
+        if pipeline is not None:
+            return pipeline
         try:
             from kokoro import KPipeline
-
-            self._pipeline = KPipeline(lang_code="a")
         except ImportError:
             raise RuntimeError(
                 "kokoro package not installed. Install with: pip install kokoro"
             )
+        pipeline = KPipeline(lang_code=lang_code)
+        self._pipelines[lang_code] = pipeline
+        return pipeline
 
     def synthesize(
         self,
@@ -44,12 +56,12 @@ class KokoroTTSBackend(TTSBackend):
         speed: float = 1.0,
         output_format: str = "wav",
     ) -> TTSResult:
-        self._ensure_pipeline()
+        pipeline = self._ensure_pipeline(self._lang_for_voice(voice_id))
         import numpy as np
         import soundfile as sf
 
         samples = []
-        for _, _, audio in self._pipeline(text, voice=voice_id, speed=speed):
+        for _, _, audio in pipeline(text, voice=voice_id, speed=speed):
             samples.append(audio)
 
         if not samples:
@@ -70,7 +82,13 @@ class KokoroTTSBackend(TTSBackend):
         )
 
     def available_voices(self) -> List[str]:
-        return ["af_heart", "af_bella", "am_adam", "am_michael"]
+        return [
+            # American English
+            "af_heart", "af_bella", "am_adam", "am_michael",
+            # British English (bm_* = British male — JARVIS-style)
+            "bm_george", "bm_lewis", "bm_fable", "bm_daniel",
+            "bf_emma", "bf_isabella",
+        ]
 
     def health(self) -> bool:
         try:

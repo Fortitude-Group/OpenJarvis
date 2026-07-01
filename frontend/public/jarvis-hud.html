@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OPENJARVIS // HUD</title>
+<style>
+  :root{
+    --cyan:#39d8ff; --cyan-dim:#1a6f88; --amber:#ffb43a; --green:#4dffb0;
+    --white:#eafaff; --bg:#02060a;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  /* position:relative makes body the box that all HUD elements anchor to —
+     sized to the actual iframe element, NOT the (WebView2-buggy) viewport. */
+  html,body{height:100%;width:100%;background:var(--bg);overflow:hidden;position:relative;
+    font-family:"SF Mono",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;
+    color:var(--cyan);-webkit-user-select:none;user-select:none;cursor:default}
+  #stage{position:absolute;inset:0}
+  #c{position:absolute;inset:0;width:100%;height:100%}  /* reactor only — NOT sidebar canvases */
+
+  /* vignette + scanlines */
+  #fx{position:absolute;inset:0;pointer-events:none;z-index:5}
+  #fx::before{content:"";position:absolute;inset:0;
+    background:radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,.55) 100%)}
+  #fx::after{content:"";position:absolute;inset:0;opacity:.06;
+    background:repeating-linear-gradient(0deg, #fff 0, #fff 1px, transparent 2px, transparent 3px)}
+
+  /* corner brackets */
+  .bracket{position:absolute;width:60px;height:60px;border:2px solid var(--cyan);
+    opacity:.55;z-index:6;filter:drop-shadow(0 0 6px var(--cyan-dim));transition:opacity .4s}
+  .bracket.tl{top:22px;left:22px;border-right:0;border-bottom:0}
+  .bracket.tr{top:22px;right:22px;border-left:0;border-bottom:0}
+  .bracket.bl{bottom:22px;left:22px;border-right:0;border-top:0}
+  .bracket.br{bottom:22px;right:22px;border-left:0;border-top:0}
+
+  .panel{position:absolute;z-index:7;font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;line-height:1.7;text-shadow:0 0 8px var(--cyan-dim)}
+  #tl{top:30px;left:96px}
+  #tl .title{font-size:15px;font-weight:700;letter-spacing:.34em;color:var(--white)}
+  #tl .sub{color:var(--cyan);opacity:.7}
+  #tr{top:30px;right:96px;text-align:right}
+  #tr b{color:var(--white);font-weight:600}
+  .dim{opacity:.55}
+
+  #state{position:absolute;left:96px;bottom:120px;z-index:7;font-size:13px;
+    letter-spacing:.3em;text-transform:uppercase;display:flex;align-items:center;gap:10px}
+  #dot{width:11px;height:11px;border-radius:50%;background:var(--cyan);
+    box-shadow:0 0 14px var(--cyan);animation:dotpulse 1.6s ease-in-out infinite}
+  @keyframes dotpulse{50%{opacity:.35}}
+
+  #subtitle{position:absolute;left:50%;bottom:150px;transform:translateX(-50%);
+    z-index:7;max-width:62%;text-align:center;font-size:17px;line-height:1.5;
+    color:var(--white);letter-spacing:.02em;text-shadow:0 0 12px var(--cyan-dim);
+    min-height:1.5em;font-family:ui-sans-serif,system-ui,"Segoe UI",sans-serif;
+    text-transform:none}
+  #subtitle .caret{display:inline-block;width:8px;height:1em;vertical-align:-2px;
+    margin-left:3px;background:var(--cyan);animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* input bar */
+  #bar{position:absolute;left:50%;bottom:54px;transform:translateX(-50%);z-index:8;
+    display:flex;align-items:center;gap:12px;width:min(620px,70%);
+    padding:10px 14px;border-radius:40px;
+    background:rgba(8,22,30,.6);border:1px solid rgba(57,216,255,.35);
+    backdrop-filter:blur(8px);box-shadow:0 0 30px rgba(57,216,255,.12)}
+  #mic{flex:none;width:40px;height:40px;border-radius:50%;border:1px solid rgba(57,216,255,.5);
+    background:rgba(57,216,255,.08);color:var(--cyan);cursor:pointer;
+    display:flex;align-items:center;justify-content:center;transition:.2s}
+  #mic:hover{background:rgba(57,216,255,.2)}
+  #mic.rec{background:var(--green);color:#012;border-color:var(--green);
+    box-shadow:0 0 22px var(--green);animation:dotpulse 1s ease-in-out infinite}
+  #mic.armed{border-color:var(--cyan);color:var(--cyan);
+    background:rgba(57,216,255,.16);box-shadow:0 0 18px rgba(57,216,255,.55);
+    animation:dotpulse 1.8s ease-in-out infinite}
+  #modelsel{flex:none;max-width:160px;background:rgba(57,216,255,.08);color:var(--cyan);
+    border:1px solid rgba(57,216,255,.35);border-radius:16px;padding:7px 9px;font-size:11px;
+    font-family:inherit;outline:none;cursor:pointer;letter-spacing:.03em;text-transform:uppercase}
+  #modelsel:hover{background:rgba(57,216,255,.16)}
+  #modelsel option,#modelsel optgroup{background:#06121a;color:#cfefff;text-transform:none}
+  #q{flex:1;background:transparent;border:0;outline:0;color:var(--white);
+    font-size:15px;font-family:inherit;letter-spacing:.02em}
+  #q::placeholder{color:rgba(57,216,255,.45)}
+  #send{flex:none;width:40px;height:40px;border-radius:50%;border:0;cursor:pointer;
+    background:rgba(57,216,255,.14);color:var(--cyan);display:flex;align-items:center;
+    justify-content:center;transition:.2s}
+  #send:hover{background:rgba(57,216,255,.28)}
+  #send:disabled{opacity:.3;cursor:default}
+
+  #hint{position:absolute;right:96px;bottom:120px;z-index:7;font-size:10px;
+    letter-spacing:.16em;text-align:right;opacity:.5;text-transform:uppercase}
+  .off{color:#ff5a6a !important;text-shadow:0 0 8px #ff5a6a55}
+
+  /* system side panels — live tech telemetry, Stark-style (left + right) */
+  .sidefx{position:absolute;z-index:7;top:124px;width:250px;font-size:10px;letter-spacing:.08em;
+    padding:13px 14px 11px;border:1px solid rgba(57,216,255,.22);border-radius:10px;
+    background:linear-gradient(180deg,rgba(3,10,15,.82),rgba(3,10,15,.66));
+    backdrop-filter:blur(5px);text-transform:uppercase;
+    box-shadow:0 0 26px rgba(57,216,255,.06) inset,0 0 18px rgba(0,0,0,.45)}
+  #sys{left:30px}
+  #sysr{right:30px}
+  .sidefx .h{color:var(--white);opacity:.85;font-weight:700;letter-spacing:.2em;
+    font-size:9px;margin:11px 0 5px;display:flex;align-items:center;gap:5px}
+  .sidefx .h:first-child{margin-top:0}
+  .sidefx .h::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,rgba(57,216,255,.3),transparent)}
+  .sidefx .sec{display:flex;flex-direction:column;gap:2px}
+  .sidefx .row{display:flex;justify-content:space-between;gap:8px;line-height:1.6}
+  .sidefx .k{opacity:.5}
+  .sidefx .v{color:var(--white);text-align:right;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;max-width:165px}
+  .sidefx .spk{margin-top:7px}
+  .sidefx .spk .lab{display:flex;justify-content:space-between;font-size:9px;opacity:.72;margin-bottom:1px}
+  .sidefx .spk .lab .v{color:var(--cyan)}
+  .sidefx canvas{display:block;width:100%}
+  .sidefx .sl{height:26px;opacity:.92}
+  .sidefx #osc{height:34px;margin-top:11px;opacity:.8}
+  #radar{height:132px;opacity:.92;margin-top:3px}
+  #spec{height:34px;opacity:.85;margin-top:3px}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c"></canvas></div>
+<div id="fx"></div>
+<div class="bracket tl"></div><div class="bracket tr"></div>
+<div class="bracket bl"></div><div class="bracket br"></div>
+
+<div class="panel" id="tl">
+  <div class="title">J.A.R.V.I.S</div>
+  <div class="sub">Just A Rather Very Intelligent System</div>
+  <div class="sub dim" id="conn">◇ linking…</div>
+</div>
+<div class="panel" id="tr">
+  <div><span class="dim">MODEL</span> <b id="model">—</b></div>
+  <div><span class="dim">ENGINE</span> <b id="engine">ollama</b></div>
+  <div><span class="dim">RATE</span> <b id="rate">0.0</b> tok/s</div>
+  <div><span class="dim">LATENCY</span> <b id="lat">—</b></div>
+</div>
+
+<div class="panel sidefx" id="sys">
+  <div class="h">DEVICE</div>
+  <div class="sec">
+    <div class="row"><span class="k">GPU</span><span class="v" id="s-gpu">—</span></div>
+    <div class="row"><span class="k">CPU</span><span class="v" id="s-cpu">—</span></div>
+    <div class="row"><span class="k">HOST</span><span class="v" id="s-os">—</span></div>
+  </div>
+  <div class="h">SESSION</div>
+  <div class="sec">
+    <div class="row"><span class="k">Uptime</span><span class="v" id="s-up">00:00</span></div>
+    <div class="row"><span class="k">Queries</span><span class="v" id="s-req">0</span></div>
+    <div class="row"><span class="k">Tokens</span><span class="v" id="s-tok">0</span></div>
+    <div class="row"><span class="k">Tok/s</span><span class="v" id="s-tps">0.0</span></div>
+    <div class="row"><span class="k">Energy</span><span class="v" id="s-nrg">0 J</span></div>
+  </div>
+  <div class="h">TELEMETRY</div>
+  <div class="spk"><div class="lab"><span>GPU Load</span><span class="v" id="s-gpuu">0%</span></div><canvas class="sl" id="sl-gpu" width="232" height="26"></canvas></div>
+  <div class="spk"><div class="lab"><span>Power</span><span class="v" id="s-pwr">0 W</span></div><canvas class="sl" id="sl-pwr" width="232" height="26"></canvas></div>
+  <div class="spk"><div class="lab"><span>Signal</span><span class="v" id="s-sig">0%</span></div><canvas class="sl" id="sl-sig" width="232" height="26"></canvas></div>
+  <canvas id="osc" width="232" height="34"></canvas>
+</div>
+
+<div class="panel sidefx" id="sysr">
+  <div class="h">CHRONO</div>
+  <div class="sec">
+    <div class="row"><span class="k">Local</span><span class="v" id="r-loc">--:--:--</span></div>
+    <div class="row"><span class="k">UTC</span><span class="v" id="r-utc">--:--:--</span></div>
+    <div class="row"><span class="k">Date</span><span class="v" id="r-date">—</span></div>
+  </div>
+  <div class="h">UPLINK</div>
+  <div class="sec">
+    <div class="row"><span class="k">Status</span><span class="v" id="r-stat">—</span></div>
+    <div class="row"><span class="k">Ping</span><span class="v" id="r-ping">— ms</span></div>
+    <div class="row"><span class="k">Models</span><span class="v" id="r-mdl">—</span></div>
+  </div>
+  <div class="h">RADAR</div>
+  <canvas id="radar" width="232" height="132"></canvas>
+  <div class="h">SPECTRUM</div>
+  <canvas id="spec" width="232" height="34"></canvas>
+</div>
+
+<div id="state"><span id="dot"></span><span id="stxt">IDLE</span></div>
+<div id="hint">🎙 mic / core / ␣ = talk (auto-stops on silence)<br>talk over JARVIS to interrupt · Esc = stop · ↵ type</div>
+<div id="subtitle"></div>
+
+<div id="bar">
+  <button id="mic" title="Hold a thought, sir — click to speak">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+  </button>
+  <select id="modelsel" title="Choose model"><option>…</option></select>
+  <input id="q" type="text" placeholder="Speak or type, sir…" autocomplete="off" autofocus>
+  <button id="send" title="Send" disabled>
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+  </button>
+</div>
+
+<script>
+//=================================================================
+//  CONFIG
+//=================================================================
+// Backend base. Absolute (not '') so the HUD works whether it is loaded from the
+// app's own origin (http://tauri.localhost — desktop app, cross-origin fetch via
+// CORS) or directly from the backend (http://127.0.0.1:8000 — standalone web HUD,
+// same-origin). Must be 127.0.0.1 (IPv4): the backend binds IPv4 only and
+// localhost resolves to ::1 first on Windows, which is refused.
+const API   = 'http://127.0.0.1:8000';
+const TTS   = 'http://127.0.0.1:8731';   // Kokoro sidecar fallback (IPv4 — localhost=::1 is refused)
+const VOICE = 'bm_george';
+const SPEED = 1.05;                      // +5% speech rate (starting point)
+let   MODEL = 'qwen3.5:4b';
+const SYSTEM = "You are JARVIS, a refined British AI butler. Be concise, calm, "
+            + "and address the user as 'sir'. One or two sentences unless asked for more.";
+
+//=================================================================
+//  STATE
+//=================================================================
+const ST = { IDLE:'IDLE', LISTENING:'LISTENING', THINKING:'THINKING', SPEAKING:'SPEAKING' };
+const COLOR = { IDLE:'#39d8ff', LISTENING:'#4dffb0', THINKING:'#ffb43a', SPEAKING:'#bfefff' };
+let state = ST.IDLE;
+let messages = [{role:'system', content:SYSTEM}];
+let analyser = null, audioData = null;      // current reactive source
+let audioCtx = null;
+let level = 0;                              // smoothed 0..1 audio level
+
+const $ = id => document.getElementById(id);
+function setState(s){
+  state = s;
+  $('stxt').textContent = s;
+  const col = COLOR[s];
+  document.documentElement.style.setProperty('--cyan', col);
+  $('dot').style.background = col;
+  $('dot').style.boxShadow = '0 0 14px '+col;
+}
+
+//=================================================================
+//  CANVAS  —  the Full Stark HUD
+//=================================================================
+const cv = $('c'), ctx = cv.getContext('2d');
+let W=0,H=0,DPR=Math.min(window.devicePixelRatio||1,2);
+// Size from the canvas's own rendered box (= the iframe element), NOT innerWidth —
+// WebView2 reports a too-wide viewport for an iframe, which off-centred the reactor.
+function resize(){ const w=cv.clientWidth||document.documentElement.clientWidth,
+                       h=cv.clientHeight||document.documentElement.clientHeight;
+  W=cv.width=w*DPR; H=cv.height=h*DPR; }
+addEventListener('resize',resize); resize();
+
+function ring(cx,cy,r,opts){
+  const {seg=0, gap=0, w=2, col='#39d8ff', a=1, dash=false, rot=0} = opts;
+  ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot);
+  ctx.strokeStyle=col; ctx.globalAlpha=a; ctx.lineWidth=w;
+  ctx.shadowColor=col; ctx.shadowBlur=12;
+  if(seg>0){
+    const step=(Math.PI*2)/seg, arc=step*(1-gap);
+    for(let i=0;i<seg;i++){ ctx.beginPath();
+      ctx.arc(0,0,r,i*step,i*step+arc); ctx.stroke(); }
+  } else {
+    ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.stroke();
+  }
+  ctx.restore();
+}
+function ticks(cx,cy,r,n,len,col,a,rot){
+  ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot);
+  ctx.strokeStyle=col; ctx.globalAlpha=a; ctx.lineWidth=1.5;
+  ctx.shadowColor=col; ctx.shadowBlur=6;
+  for(let i=0;i<n;i++){ const ang=(i/n)*Math.PI*2;
+    const x1=Math.cos(ang)*r, y1=Math.sin(ang)*r;
+    const x2=Math.cos(ang)*(r+len), y2=Math.sin(ang)*(r+len);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
+  ctx.restore();
+}
+
+let t=0;
+function draw(){
+  t += 0.016;
+  ctx.clearRect(0,0,W,H);
+  const cx=W/2, cy=H/2;
+  const base=Math.min(W,H)*0.20;
+  const col=COLOR[state];
+
+  // --- audio level (smoothed) ---
+  let target=0;
+  if(analyser && audioData){
+    analyser.getByteFrequencyData(audioData);
+    let s=0; for(let i=0;i<audioData.length;i++) s+=audioData[i];
+    target=Math.min(1,(s/audioData.length)/110);
+  }
+  // idle shimmer so it's never dead
+  if(state===ST.IDLE) target=0.12+0.06*Math.sin(t*1.6);
+  if(state===ST.THINKING) target=0.45+0.25*Math.sin(t*9)+0.1*Math.sin(t*3);
+  level += (target-level)*0.18;
+
+  const pulse=1+level*0.35+0.02*Math.sin(t*2);
+
+  // --- outer degree ring with ticks (rotating) ---
+  ticks(cx,cy,base*2.15, 72, 10, col, .35, t*0.05);
+  ticks(cx,cy,base*2.15, 12, 20, col, .6, t*0.05);
+  ring(cx,cy,base*2.05,{w:1,col,a:.25});
+
+  // --- big rotating segmented arcs ---
+  ring(cx,cy,base*1.75,{seg:3, gap:.28, w:4, col, a:.8, rot:t*0.35});
+  ring(cx,cy,base*1.55,{seg:6, gap:.5,  w:2, col, a:.5, rot:-t*0.5});
+  ring(cx,cy,base*1.40,{seg:24,gap:.55, w:6, col, a:.25,rot:t*0.18});
+
+  // --- audio-reactive radial bars ---
+  ctx.save(); ctx.translate(cx,cy);
+  const N=96, rr=base*1.05;
+  for(let i=0;i<N;i++){
+    let mag=0.2;
+    if(analyser && audioData){ mag=0.15 + (audioData[i%audioData.length]/255)*1.2; }
+    else { mag=0.2+0.5*Math.abs(Math.sin(i*0.6+t*4))*level + 0.1*level; }
+    const ang=(i/N)*Math.PI*2;
+    const r1=rr, r2=rr+mag*base*0.7;
+    ctx.strokeStyle=col; ctx.globalAlpha=.55; ctx.lineWidth=2.4;
+    ctx.shadowColor=col; ctx.shadowBlur=8;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(ang)*r1,Math.sin(ang)*r1);
+    ctx.lineTo(Math.cos(ang)*r2,Math.sin(ang)*r2);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // --- inner reactor rings ---
+  ring(cx,cy,base*0.92,{seg:3,gap:.18,w:5,col,a:.9,rot:-t*0.6});
+  ring(cx,cy,base*0.78,{w:2,col,a:.5});
+  ring(cx,cy,base*0.60,{seg:12,gap:.45,w:3,col,a:.7,rot:t*0.9});
+
+  // --- core ---
+  const cr=base*0.42*pulse;
+  const g=ctx.createRadialGradient(cx,cy,0,cx,cy,cr);
+  g.addColorStop(0,'#ffffff');
+  g.addColorStop(0.35,col);
+  g.addColorStop(1,'rgba(57,216,255,0)');
+  ctx.save(); ctx.globalAlpha=.9+level*0.1;
+  ctx.fillStyle=g; ctx.shadowColor=col; ctx.shadowBlur=40;
+  ctx.beginPath(); ctx.arc(cx,cy,cr,0,Math.PI*2); ctx.fill();
+  // triangle reactor motif
+  ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.lineWidth=2; ctx.shadowBlur=18;
+  ctx.beginPath();
+  for(let i=0;i<3;i++){ const a=t*0.4 - Math.PI/2 + i*(Math.PI*2/3);
+    const x=cx+Math.cos(a)*cr*0.55, y=cy+Math.sin(a)*cr*0.55;
+    i?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+  ctx.closePath(); ctx.stroke();
+  ctx.restore();
+
+  requestAnimationFrame(draw);
+}
+draw();
+
+//=================================================================
+//  AUDIO PLUMBING
+//=================================================================
+function ensureCtx(){ if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)(); return audioCtx; }
+function attach(node){
+  const ac=ensureCtx();
+  const an=ac.createAnalyser(); an.fftSize=256; an.smoothingTimeConstant=0.75;
+  node.connect(an);
+  analyser=an; audioData=new Uint8Array(an.frequencyBinCount);
+}
+function detach(){ analyser=null; audioData=null; }
+
+//=================================================================
+//  VOICE  —  wake word "Jarvis" (Web Speech) + local push-to-talk (whisper)
+//=================================================================
+const WAKE = /\bjarvis\b/i;
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog=null, ambient=false, awaiting=false, speaking=false, cmdTimer=null;
+
+function pauseRecog(){ if(recog){ try{recog.stop()}catch{} } }
+function resumeAmbient(){ if(ambient && recog && !speaking){ try{recog.start()}catch{} } }
+
+function buildRecog(){
+  if(!SR) return null;
+  const r=new SR();
+  r.continuous=true; r.interimResults=true; r.lang='en-GB';
+  r.onresult=onSpeech;
+  r.onerror=e=>{
+    if(e.error==='not-allowed'||e.error==='service-not-allowed'){
+      flash('allow the microphone, sir'); ambient=false; micUI();
+    }
+  };
+  r.onend=()=>{ if(ambient && !speaking){ try{r.start()}catch{} } };
+  return r;
+}
+function onSpeech(ev){
+  let fin='',int='';
+  for(let i=ev.resultIndex;i<ev.results.length;i++){
+    const t=ev.results[i][0].transcript;
+    if(ev.results[i].isFinal) fin+=t; else int+=t;
+  }
+  const heard=fin||int;
+  if(awaiting){                       // wake word already heard — capture command
+    setState(ST.LISTENING);
+    if(fin.trim()) command(fin); else sub('▸ '+int);
+    return;
+  }
+  if(WAKE.test(heard)){
+    const after=heard.replace(/^[\s\S]*?\bjarvis\b[\s,.:!-]*/i,'').trim();
+    if(fin && after) command(after);  // "Jarvis, what's the time" — one shot
+    else arm();                       // just "Jarvis" — await the command
+  }
+}
+function arm(){
+  awaiting=true; setState(ST.LISTENING); sub('Yes, sir?');
+  clearTimeout(cmdTimer);
+  cmdTimer=setTimeout(()=>{ if(awaiting){awaiting=false;setState(ST.IDLE);sub('');} },8000);
+}
+function command(text){
+  awaiting=false; clearTimeout(cmdTimer);
+  text=text.replace(/^[\s\S]*?\bjarvis\b[\s,.:!-]*/i,'').replace(/^\s*jarvis[\s,.:!-]*/i,'').trim();
+  if(!text){ arm(); return; }
+  ask(text);
+}
+function setAmbient(on){
+  ambient=on;
+  if(on){
+    recog=recog||buildRecog();
+    if(!recog){ flash('no speech recognition in this browser'); ambient=false; micUI(); return; }
+    try{recog.start()}catch{}
+  } else {
+    awaiting=false; pauseRecog(); setState(ST.IDLE); sub('');
+  }
+  micUI();
+}
+function micUI(){
+  $('mic').classList.toggle('armed',ambient);
+  const c=$('conn');
+  c.textContent = ambient ? '◆ listening — say “Jarvis”' : (c.dataset.online||'◆ online');
+  c.classList.remove('off');
+}
+
+// ---- push-to-talk STT: record -> backend whisper, with silence auto-stop + BARGE-IN ----
+//  • One control toggles record on/off (mic icon, reactor core, or Space).
+//  • Starting a turn calls stopTTS() so you can talk over JARVIS to interrupt him.
+//  • echoCancellation keeps his voice out of your recording; silence ends the turn.
+let micStream=null, micSource=null, micAnalyser=null, vadBuf=null, recorder=null, chunks=[], recording=false;
+let silenceTimer=null, sawSpeech=false, maxRecTimer=null;
+
+// RMS volume (0..1) from the mic — a reliable voice-activity measure.
+function micRMS(){
+  if(!micAnalyser) return 0;
+  micAnalyser.getByteTimeDomainData(vadBuf);
+  let s=0; for(let i=0;i<vadBuf.length;i++){ const v=(vadBuf[i]-128)/128; s+=v*v; }
+  return Math.sqrt(s/vadBuf.length);
+}
+
+function toggleTalk(){ ensureCtx(); if(recording) stopRecording(); else startRecording(); }
+
+async function startRecording(){
+  if(recording) return;
+  stopTTS();                                  // BARGE-IN: cut JARVIS off the moment you speak
+  // autoGainControl OFF — it boosts silence and breaks pause detection.
+  try{ micStream = micStream || await navigator.mediaDevices.getUserMedia(
+        {audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:false}}); }
+  catch(e){ flash('microphone blocked, sir'); setState(ST.IDLE); return; }
+  recording=true; sawSpeech=false; clearTimeout(silenceTimer); silenceTimer=null;
+  micSource = micSource || ensureCtx().createMediaStreamSource(micStream);
+  if(!micAnalyser){
+    micAnalyser=ensureCtx().createAnalyser(); micAnalyser.fftSize=1024; micAnalyser.smoothingTimeConstant=0.3;
+    micSource.connect(micAnalyser); vadBuf=new Uint8Array(micAnalyser.fftSize);
+  }
+  analyser=micAnalyser; audioData=new Uint8Array(micAnalyser.frequencyBinCount);  // reactor reacts to your voice
+  setState(ST.LISTENING); sub('listening…'); $('mic').classList.add('rec');
+  chunks=[]; recorder=new MediaRecorder(micStream);
+  recorder.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
+  recorder.onstop=onRecordingStop;
+  recorder.start();
+  monitorSilence();
+  clearTimeout(maxRecTimer); maxRecTimer=setTimeout(stopRecording, 15000);   // hard cap
+}
+function stopRecording(){
+  if(!recording) return;
+  recording=false; clearTimeout(silenceTimer); silenceTimer=null; clearTimeout(maxRecTimer);
+  $('mic').classList.remove('rec');
+  try{ if(recorder && recorder.state==='recording') recorder.stop(); }catch{}
+}
+function monitorSilence(){
+  // Voice-activity detection on mic RMS. Calibrate the noise floor for the first
+  // ~250ms, then end the turn ~800ms after you stop talking (once we've heard
+  // speech). Thresholds are relative to YOUR room so it works on any mic.
+  let calib=[], calibrating=true, tc=performance.now(), floor=0.012;
+  (function tick(){
+    if(!recording) return;
+    const e=micRMS();
+    if(calibrating){
+      calib.push(e);
+      if(performance.now()-tc>250){ calibrating=false; calib.sort((a,b)=>a-b); floor=calib[calib.length>>1]||0.012; }
+      return requestAnimationFrame(tick);
+    }
+    const speak=Math.max(0.020, floor*3.2);
+    const quiet=Math.max(0.012, floor*1.8);
+    if(e>speak) sawSpeech=true;
+    if(sawSpeech && e<quiet){ if(!silenceTimer) silenceTimer=setTimeout(stopRecording, 800); }
+    else if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; }
+    requestAnimationFrame(tick);
+  })();
+}
+async function onRecordingStop(){
+  $('mic').classList.remove('rec'); detach();
+  const blob=new Blob(chunks,{type:'audio/webm'});
+  if(blob.size<1800){ setState(ST.IDLE); sub(''); return; }   // too short to be speech
+  setState(ST.THINKING); sub('transcribing…');
+  try{
+    const fd=new FormData(); fd.append('file',blob,'speech.webm');
+    const r=await fetch(API+'/v1/speech/transcribe',{method:'POST',body:fd});
+    if(!r.ok) throw new Error('stt '+r.status);
+    const d=await r.json();
+    const text=(d.text||'').trim().replace(/^\s*jarvis[\s,.:!-]*/i,''); // drop a leading "Jarvis,"
+    if(text){ sub('“'+text+'”'); ask(text); }
+    else { setState(ST.IDLE); sub('(didn’t catch that, sir)'); setTimeout(()=>{ if(state===ST.IDLE && !recording) sub(''); },1800); }
+  }catch(e){ setState(ST.IDLE); flash('speech transcription failed'); }
+}
+
+//=================================================================
+//  CHAT  (/v1/chat/completions, streaming)
+//=================================================================
+let t0=0, ntok=0;
+async function ask(text){
+  if(!text.trim()) return;
+  stopTTS();                       // interrupt any current speech/stream before a new turn
+  $('q').value=''; $('send').disabled=true;
+  messages.push({role:'user',content:text});
+  setState(ST.THINKING); sub(''); resetTTS();
+  let acc='', firstTok=0; t0=performance.now(); ntok=0;
+  const subEl=$('subtitle');
+  const myAbort = currentChatAbort = new AbortController();   // this turn's controller
+  try{
+    const r=await fetch(API+'/v1/chat/completions',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:MODEL,messages,stream:true}),
+      signal:myAbort.signal
+    });
+    if(!r.ok) throw new Error(r.status);
+    const reader=r.body.getReader(), dec=new TextDecoder(); let buf='';
+    for(;;){
+      const {done,value}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n'); buf=lines.pop()||'';
+      for(const ln of lines){
+        if(!ln.startsWith('data: ')) continue;
+        const p=ln.slice(6); if(p==='[DONE]') continue;
+        try{ const j=JSON.parse(p);
+          const c=j.choices?.[0]?.delta?.content;
+          if(c){ if(!firstTok){firstTok=performance.now(); $('lat').textContent=Math.round(firstTok-t0)+'ms';}
+            acc+=c; ntok++; feedTTS(c);
+            subEl.innerHTML=esc(acc)+'<span class="caret"></span>';
+            $('rate').textContent=(ntok/((performance.now()-t0)/1000)).toFixed(1);
+          }
+        }catch{}
+      }
+    }
+  }catch(e){
+    if(myAbort.signal.aborted) return;        // superseded by a newer turn (barge-in) — bail quietly
+    if(!acc){ acc='I could not reach the engine, sir.'; feedTTS(acc); }
+  }
+  if(myAbort.signal.aborted) return;          // don't post-process / speak an interrupted turn
+  messages.push({role:'assistant',content:acc});
+  subEl.innerHTML=esc(acc);
+  endTTS();
+}
+
+//=================================================================
+//  STREAMING TTS  —  sentence-pipelined Kokoro playback
+//   Synthesize + speak each sentence as soon as it streams in, so JARVIS
+//   starts talking after the FIRST sentence rather than the whole reply.
+//   All buffers feed one persistent analyser + are scheduled back-to-back
+//   on the AudioContext clock for gapless playback.
+//=================================================================
+const TTS_ENDPOINTS = [API+'/v1/speech/tts', TTS+'/tts'];  // backend first (API-prefixed!), sidecar fallback
+let ttsURL=null, ttsAnalyser=null, ttsGain=null;
+let playHead=0, liveSrc=0, genDone=true, synthRunning=false;
+let pendingText='', synthQ=[], ttsFailed=false, firstAudio=false;
+let ttsSources=[], currentChatAbort=null;   // for barge-in / interrupt
+
+function ttsChain(){
+  const ac=ensureCtx();
+  if(!ttsAnalyser){
+    ttsAnalyser=ac.createAnalyser(); ttsAnalyser.fftSize=256; ttsAnalyser.smoothingTimeConstant=0.7;
+    ttsGain=ac.createGain(); ttsGain.connect(ttsAnalyser); ttsAnalyser.connect(ac.destination);
+  }
+  return {ac, gain:ttsGain, an:ttsAnalyser};
+}
+function resetTTS(){
+  playHead=0; liveSrc=0; genDone=false; synthRunning=false;
+  pendingText=''; synthQ=[]; ttsFailed=false; firstAudio=false;
+}
+// BARGE-IN: silence JARVIS instantly, drop pending speech, abort the live reply.
+function stopTTS(){
+  for(const s of ttsSources){ try{ s.onended=null; s.stop(); s.disconnect(); }catch{} }
+  ttsSources=[];
+  synthQ=[]; pendingText=''; genDone=true; synthRunning=false; ttsFailed=false;
+  playHead=0; liveSrc=0; firstAudio=false; speaking=false;
+  try{ if(window.speechSynthesis) speechSynthesis.cancel(); }catch{}
+  if(currentChatAbort){ try{ currentChatAbort.abort(); }catch{} currentChatAbort=null; }
+}
+// NATURAL-FLOW chunking: synthesize WHOLE SENTENCES. Kokoro keeps human prosody
+// within a sentence (its own comma pauses, intonation), and pauses only fall at
+// real sentence boundaries. We never split on commas — doing so made each fragment
+// get sentence-final intonation, i.e. pauses in the wrong places. A pathologically
+// long run with no terminator is flushed at a clause/word boundary as a stall-guard.
+const SENT_RE=/^([\s\S]*?[.!?…])(\s+|$)/;
+function feedTTS(tok){
+  pendingText+=tok;
+  for(let guard=0; guard<40; guard++){
+    const m=SENT_RE.exec(pendingText);
+    if(m){
+      const s=m[1].trim(); pendingText=pendingText.slice(m[0].length);
+      if(s) synthQ.push(s);
+      if(!pendingText) break;
+      continue;
+    }
+    if(pendingText.length>200){                 // very long run, still no sentence end
+      let cut=-1, re=/[,;:]\s/g, mm;             // prefer the last clause boundary before 180
+      while((mm=re.exec(pendingText))){ if(mm.index<180) cut=mm.index+1; else break; }
+      if(cut<60) cut=pendingText.lastIndexOf(' ',180);
+      if(cut>60){ const s=pendingText.slice(0,cut).trim(); if(s) synthQ.push(s); pendingText=pendingText.slice(cut).replace(/^\s+/,''); continue; }
+    }
+    break;
+  }
+  pumpSynth();
+}
+function endTTS(){
+  genDone=true;
+  if(pendingText.trim()){ synthQ.push(pendingText.trim()); pendingText=''; }
+  pumpSynth(); maybeFinishTTS();
+}
+async function synth(text){
+  const tryUrl=async u=>{ const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text,voice:VOICE,speed:SPEED})}); return r.ok ? await r.arrayBuffer() : null; };
+  if(ttsURL){ try{ return await tryUrl(ttsURL); }catch{ return null; } }
+  for(const u of TTS_ENDPOINTS){ try{ const b=await tryUrl(u); if(b){ ttsURL=u; return b; } }catch{} }
+  return null;
+}
+async function pumpSynth(){
+  if(synthRunning || ttsFailed) return;
+  synthRunning=true;
+  const {ac}=ttsChain();
+  if(ac.state==='suspended'){ try{await ac.resume()}catch{} }
+  while(synthQ.length){
+    const s=synthQ.shift(); if(!s) continue;
+    const buf=await synth(s);
+    if(buf===null){ ttsFailed=true; synthRunning=false; fallbackSpeak(); return; }
+    try{ const audio=await ac.decodeAudioData(buf.slice(0)); scheduleBuffer(audio); }catch(e){}
+  }
+  synthRunning=false; maybeFinishTTS();
+}
+function scheduleBuffer(audio){
+  const {ac,gain,an}=ttsChain();
+  const src=ac.createBufferSource(); src.buffer=audio; src.connect(gain);
+  ttsSources.push(src);                                          // track for barge-in
+  analyser=an; audioData=new Uint8Array(an.frequencyBinCount);   // reactor reads the TTS chain
+  const start=Math.max(ac.currentTime+0.02, playHead);
+  src.start(start); playHead=start+audio.duration; liveSrc++;
+  if(!firstAudio){ firstAudio=true; speaking=true; setState(ST.SPEAKING);
+    $('lat').textContent=Math.round(performance.now()-t0)+'ms▸audio'; }
+  src.onended=()=>{ liveSrc--; const i=ttsSources.indexOf(src); if(i>=0) ttsSources.splice(i,1); maybeFinishTTS(); };
+}
+function maybeFinishTTS(){
+  if(genDone && !synthRunning && synthQ.length===0 && liveSrc<=0 && firstAudio){
+    analyser=null; audioData=null; speaking=false; setState(ST.IDLE); sub(''); resumeAmbient();
+  } else if(genDone && ttsFailed && !window.speechSynthesis?.speaking){
+    /* browser fallback handles its own end */
+  }
+}
+function fallbackSpeak(){ browserSpeak($('subtitle').textContent || ''); }
+function browserSpeak(text){
+  try{
+    const u=new SpeechSynthesisUtterance(text);
+    const v=speechSynthesis.getVoices();
+    u.voice=v.find(x=>/en-GB/i.test(x.lang)&&/male|george|daniel|ryan/i.test(x.name))
+          || v.find(x=>/en-GB/i.test(x.lang)) || v[0];
+    u.rate=SPEED; u.pitch=.9;
+    u.onend=()=>{ speaking=false; setState(ST.IDLE); sub(''); resumeAmbient(); };
+    // synthetic reactive envelope while speaking
+    fakeEnvelope(Math.max(1.2, text.length/14));
+    speechSynthesis.speak(u);
+  }catch(e){ speaking=false; setState(ST.IDLE); resumeAmbient(); }
+}
+function fakeEnvelope(sec){
+  detach(); const end=performance.now()+sec*1000;
+  (function tick(){ if(performance.now()>end){return;}
+    level=0.4+0.3*Math.random(); requestAnimationFrame(tick); })();
+}
+
+//=================================================================
+//  UI WIRING
+//=================================================================
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function sub(s){$('subtitle').textContent=s;}
+function flash(s){ const c=$('conn'); c.textContent='⚠ '+s; c.classList.add('off');
+  setTimeout(()=>c.classList.remove('off'),2500); }
+
+$('q').addEventListener('input',()=>$('send').disabled=!$('q').value.trim());
+$('q').addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();ask($('q').value);} });
+$('send').addEventListener('click',()=>ask($('q').value));
+$('mic').addEventListener('click',toggleTalk);
+$('c').addEventListener('click',toggleTalk);
+addEventListener('keydown',e=>{ if(e.code==='Space'&&document.activeElement!==$('q')){e.preventDefault(); toggleTalk();} });
+// Esc = hard interrupt (stop JARVIS speaking without starting a new turn)
+addEventListener('keydown',e=>{ if(e.key==='Escape'){ stopTTS(); if(!recording){ setState(ST.IDLE); sub(''); } } });
+
+// Pre-warm the local TTS engine on load so the first spoken reply has no
+// cold-start lag (synthesizes a throwaway clip; not played).
+fetch(API+'/v1/speech/tts',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({text:'Ready.',voice:VOICE,speed:SPEED})}).catch(()=>{});
+
+//=================================================================
+//  SYSTEM SIDEBAR  —  live device + session telemetry + sparklines
+//=================================================================
+(function systemPanel(){
+  const T0 = performance.now();
+  // ---- device (read client-side) ----
+  function gpuName(){
+    try{
+      const c=document.createElement('canvas');
+      const gl=c.getContext('webgl')||c.getContext('experimental-webgl');
+      const e=gl&&gl.getExtension('WEBGL_debug_renderer_info');
+      let s=e?String(gl.getParameter(e.UNMASKED_RENDERER_WEBGL)):'';
+      // "ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Ti (0x..) Direct3D11 .., D3D11)" -> renderer part
+      const a=s.match(/ANGLE\s*\([^,]+,\s*(.+)\)/i); if(a) s=a[1];
+      s=s.replace(/\s*\(0x[0-9a-f]+\)/ig,'').replace(/\s*Direct3D.*$/i,'')
+         .replace(/\s*vs_\S*|\s*ps_\S*/ig,'').replace(/\/PCIe.*$/i,'')
+         .replace(/\((R|TM)\)/ig,'').replace(/,.*$/,'').replace(/\s+/g,' ').trim();
+      s=s.replace(/^NVIDIA\s+(?=GeForce)/i,'');   // "NVIDIA GeForce RTX 3080 Ti" -> "GeForce RTX 3080 Ti" (fits)
+      return s||'—';
+    }catch{ return '—'; }
+  }
+  $('s-gpu').textContent = gpuName();
+  $('s-cpu').textContent = (navigator.hardwareConcurrency||'?')+' threads';
+  $('s-os').textContent  = (navigator.userAgentData&&navigator.userAgentData.platform)
+                           || (/Win/i.test(navigator.platform)?'Windows':(navigator.platform||'host'));
+
+  // ---- live telemetry numbers ----
+  let curGpu=0, curPwr=0;
+  const fmtDur=ms=>{ let s=Math.floor(ms/1000); const h=Math.floor(s/3600); s-=h*3600;
+    const m=Math.floor(s/60); s-=m*60;
+    return (h?String(h).padStart(2,'0')+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'); };
+  async function poll(){
+    try{
+      const [s,e]=await Promise.all([
+        fetch(API+'/v1/telemetry/stats').then(r=>r.json()).catch(()=>({})),
+        fetch(API+'/v1/telemetry/energy').then(r=>r.json()).catch(()=>({})),
+      ]);
+      if(typeof s.avg_gpu_utilization_pct==='number') curGpu=s.avg_gpu_utilization_pct;
+      if(typeof e.avg_power_w==='number') curPwr=e.avg_power_w;
+      if(s.total_requests!=null) $('s-req').textContent=s.total_requests;
+      if(s.total_tokens!=null)   $('s-tok').textContent=s.total_tokens;
+      if(s.avg_throughput_tok_per_sec!=null) $('s-tps').textContent=(+s.avg_throughput_tok_per_sec).toFixed(1);
+      if(s.total_energy_joules!=null) $('s-nrg').textContent=Math.round(s.total_energy_joules)+' J';
+      $('s-gpuu').textContent=Math.round(curGpu)+'%';
+      $('s-pwr').textContent =Math.round(curPwr)+' W';
+    }catch{}
+  }
+  setInterval(poll,1500); poll();
+  setInterval(()=>{ $('s-up').textContent=fmtDur(performance.now()-T0); },1000);
+
+  // ---- animated sparklines + oscilloscope ----
+  const HM=150, H={gpu:[],pwr:[],sig:[]};
+  function spark(id,arr,val,max,col){
+    arr.push(val); if(arr.length>HM) arr.shift();
+    const cv=$(id); if(!cv) return; const x=cv.getContext('2d'), w=cv.width, h=cv.height;
+    x.clearRect(0,0,w,h);
+    x.strokeStyle='rgba(57,216,255,.12)'; x.lineWidth=1;
+    x.beginPath(); x.moveTo(0,h-1); x.lineTo(w,h-1); x.stroke();
+    x.strokeStyle=col; x.lineWidth=1.4; x.shadowColor=col; x.shadowBlur=5; x.beginPath();
+    const n=arr.length;
+    for(let i=0;i<n;i++){ const px=(i/(HM-1))*w, py=h-2-Math.max(0,Math.min(arr[i],max))/max*(h-3);
+      i?x.lineTo(px,py):x.moveTo(px,py); }
+    x.stroke();
+    if(n){ const lx=((n-1)/(HM-1))*w, ly=h-2-Math.max(0,Math.min(arr[n-1],max))/max*(h-3);
+      x.fillStyle=col; x.beginPath(); x.arc(lx,ly,1.7,0,7); x.fill(); }
+    x.shadowBlur=0;
+  }
+  let ot=0;
+  function osc(){
+    const cv=$('osc'); if(!cv) return; const x=cv.getContext('2d'), w=cv.width, h=cv.height;
+    x.clearRect(0,0,w,h);
+    x.strokeStyle='rgba(57,216,255,.65)'; x.lineWidth=1.3; x.shadowColor='#39d8ff'; x.shadowBlur=5;
+    x.beginPath();
+    const amp=0.15+0.16*level;
+    for(let i=0;i<=w;i+=2){ const p=i*0.06;
+      const y=h/2 + Math.sin(p-ot*3.0)*h*amp*(0.55+0.45*Math.sin(ot*1.2+i*0.018))
+                  + Math.sin(p*2.6-ot*5.0)*h*0.07;
+      i?x.lineTo(i,y):x.moveTo(i,y); }
+    x.stroke(); x.shadowBlur=0;
+  }
+  (function loop(){ ot+=0.016;
+    spark('sl-gpu',H.gpu,curGpu,100,'#39d8ff');
+    spark('sl-pwr',H.pwr,curPwr,360,'#ffb43a');
+    const sig=Math.min(100,level*120); $('s-sig').textContent=Math.round(sig)+'%';
+    spark('sl-sig',H.sig,sig,100,'#4dffb0');
+    osc();
+    requestAnimationFrame(loop);
+  })();
+})();
+
+//=================================================================
+//  RIGHT PANEL  —  chrono, uplink, animated radar + spectrum
+//=================================================================
+(function rightPanel(){
+  const pad=n=>String(n).padStart(2,'0');
+  const DY=['SUN','MON','TUE','WED','THU','FRI','SAT'];
+  const MO=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  function clock(){ const d=new Date();
+    $('r-loc').textContent=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+    $('r-utc').textContent=pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+':'+pad(d.getUTCSeconds());
+    $('r-date').textContent=DY[d.getDay()]+' '+pad(d.getDate())+' '+MO[d.getMonth()]+' '+d.getFullYear();
+  }
+  clock(); setInterval(clock,1000);
+
+  async function ping(){ const t=performance.now();
+    try{ const r=await fetch(API+'/health',{cache:'no-store'});
+      if(!r.ok) throw 0;
+      $('r-ping').textContent=Math.round(performance.now()-t)+' ms';
+      $('r-stat').textContent='ONLINE'; $('r-stat').style.color='var(--green)';
+    }catch{ $('r-stat').textContent='OFFLINE'; $('r-stat').style.color='#ff5a6a'; $('r-ping').textContent='—'; }
+  }
+  ping(); setInterval(ping,2000);
+  fetch(API+'/v1/models').then(r=>r.json()).then(d=>{
+    const n=(Array.isArray(d)?d:(d.data||d.models||[])).length; $('r-mdl').textContent=n+' local';
+  }).catch(()=>{});
+
+  // ---- radar: rotating sweep + fading contact blips ----
+  let blips=[], rt=0;
+  function radar(){ rt+=0.016;
+    const cv=$('radar'); if(!cv) return; const x=cv.getContext('2d'), w=cv.width, h=cv.height;
+    const cx=w/2, cy=h/2, R=Math.min(w,h)/2-2;
+    x.clearRect(0,0,w,h);
+    x.strokeStyle='rgba(57,216,255,.16)'; x.lineWidth=1;
+    for(let i=1;i<=3;i++){ x.beginPath(); x.arc(cx,cy,R*i/3,0,7); x.stroke(); }
+    x.beginPath(); x.moveTo(cx-R,cy); x.lineTo(cx+R,cy); x.moveTo(cx,cy-R); x.lineTo(cx,cy+R); x.stroke();
+    const ang=(rt*1.05)%(Math.PI*2);
+    x.save(); x.translate(cx,cy);
+    const grad=x.createRadialGradient(0,0,0,0,0,R);
+    grad.addColorStop(0,'rgba(77,255,176,.30)'); grad.addColorStop(1,'rgba(77,255,176,0)');
+    x.fillStyle=grad; x.beginPath(); x.moveTo(0,0); x.arc(0,0,R,ang-0.55,ang); x.closePath(); x.fill();
+    x.strokeStyle='rgba(77,255,176,.85)'; x.lineWidth=1.4; x.shadowColor='#4dffb0'; x.shadowBlur=6;
+    x.beginPath(); x.moveTo(0,0); x.lineTo(Math.cos(ang)*R,Math.sin(ang)*R); x.stroke(); x.shadowBlur=0; x.restore();
+    if(Math.random()<0.025 && blips.length<7){ blips.push({a:ang+(Math.random()-0.5)*0.25, r:R*(0.25+Math.random()*0.68), life:1}); }
+    for(const b of blips){ b.life-=0.011; const bx=cx+Math.cos(b.a)*b.r, by=cy+Math.sin(b.a)*b.r;
+      x.fillStyle='rgba(77,255,176,'+Math.max(0,b.life).toFixed(3)+')';
+      x.beginPath(); x.arc(bx,by,2.2,0,7); x.fill(); }
+    blips=blips.filter(b=>b.life>0);
+    requestAnimationFrame(radar);
+  }
+  radar();
+
+  // ---- spectrum analyzer: ambient bars that react to the live audio level ----
+  const NB=22; let sp=0;
+  function spec(){ sp+=0.016;
+    const cv=$('spec'); if(!cv) return; const x=cv.getContext('2d'), w=cv.width, h=cv.height;
+    x.clearRect(0,0,w,h); const bw=w/NB;
+    for(let i=0;i<NB;i++){
+      const base=0.22+0.18*Math.sin(i*0.55+sp*4)+0.12*Math.sin(i*1.4-sp*6.3);
+      const v=Math.max(0.04, base*(0.5+level*1.6));
+      const bh=Math.min(h, v*h);
+      x.fillStyle='rgba(57,216,255,'+(0.35+0.45*v).toFixed(3)+')';
+      x.fillRect(i*bw+1, h-bh, bw-2, bh);
+    }
+    requestAnimationFrame(spec);
+  }
+  spec();
+})();
+
+//=================================================================
+//  MODEL SELECTOR  +  BOOT
+//   /v1/models is local-only; cloud models are routed by the backend
+//   when the matching API key is set (e.g. ANTHROPIC_API_KEY -> claude-*).
+//=================================================================
+const CLOUD_MODELS = [
+  'claude-sonnet-4-6','claude-opus-4-6','claude-haiku-4-5',
+  'gpt-4o','gpt-4o-mini','gemini-3-pro','gemini-2.5-pro',
+];
+const CLOUD_PFX = ['gpt-','o1-','o3-','o4-','claude-','gemini-','openrouter/','chatgpt-'];
+const isCloud = m => CLOUD_PFX.some(p => (m||'').startsWith(p));
+function setModel(id){
+  if(!id) return;
+  MODEL=id; $('model').textContent=id;
+  $('engine').textContent = isCloud(id) ? 'cloud' : 'ollama';
+  try{ localStorage.setItem('jarvis-hud-model', id); }catch{}
+  const sel=$('modelsel'); if(sel && sel.value!==id) sel.value=id;
+}
+function buildModelSelect(local){
+  const sel=$('modelsel');
+  while(sel.firstChild) sel.removeChild(sel.firstChild);
+  const add=(label,ids)=>{ if(!ids.length) return;
+    const og=document.createElement('optgroup'); og.label=label;
+    ids.forEach(id=>{ const o=document.createElement('option'); o.value=id; o.textContent=id; og.appendChild(o); });
+    sel.appendChild(og); };
+  add('Local (Ollama)', local);
+  add('Cloud', CLOUD_MODELS);
+  sel.onchange=()=>setModel(sel.value);
+}
+(async function boot(){
+  let local=[];
+  try{
+    const r=await fetch(API+'/v1/models'); const d=await r.json();
+    local=(Array.isArray(d)?d:(d.data||d.models||[])).map(m=>m.id||m.name).filter(Boolean);
+    const s='◆ online · '+local.length+' local + '+CLOUD_MODELS.length+' cloud';
+    $('conn').dataset.online=s; $('conn').textContent=s; $('conn').classList.remove('off');
+  }catch(e){ $('conn').textContent='◇ backend offline (:8000)'; $('conn').classList.add('off'); }
+  buildModelSelect(local);
+  let saved=''; try{ saved=localStorage.getItem('jarvis-hud-model')||''; }catch{}
+  const all=[...local, ...CLOUD_MODELS];
+  // Default to Sonnet 4.6 (cloud) unless the user previously picked something else.
+  const pick = (saved && all.includes(saved)) ? saved : 'claude-sonnet-4-6';
+  setModel(pick);
+  // Pre-warm the selected chat model so the FIRST real turn isn't a cold ~3s start
+  // (warm TTFT is ~1s; cold is ~3s while the agent/cloud connection spins up).
+  fetch(API+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model:MODEL,messages:[{role:'user',content:'hi'}],stream:false})}).catch(()=>{});
+  if('speechSynthesis' in window) speechSynthesis.getVoices();
+  setState(ST.IDLE);
+})();
+</script>
+</body>
+</html>

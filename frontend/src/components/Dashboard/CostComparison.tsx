@@ -4,6 +4,7 @@ import { useAppStore } from '../../lib/store';
 const CLOUD_PRICING = [
   { name: 'GPT-5.3', input: 2.00, output: 10.00 },
   { name: 'Claude Opus 4.6', input: 5.00, output: 25.00 },
+  { name: 'Claude Sonnet 4.6', input: 3.00, output: 15.00 },
   { name: 'Gemini 3.1 Pro', input: 2.00, output: 12.00 },
 ];
 

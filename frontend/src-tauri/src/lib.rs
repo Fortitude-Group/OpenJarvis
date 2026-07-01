@@ -2560,9 +2560,17 @@ async fn get_overlay_conversation() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn toggle_overlay() -> Result<(), String> {
+async fn toggle_overlay(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    on_main_thread(|| unsafe { native_overlay::toggle() });
+    {
+        let _ = &app;
+        on_main_thread(|| unsafe { native_overlay::toggle() });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let a = app.clone();
+        let _ = app.run_on_main_thread(move || toggle_hud_window(&a));
+    }
     Ok(())
 }
 
@@ -2572,6 +2580,83 @@ async fn hide_overlay() -> Result<(), String> {
     on_main_thread(|| unsafe { native_overlay::hide() });
     Ok(())
 }
+
+/// Build (on first use) and toggle the always-on-top JARVIS HUD overlay window.
+/// This is the Windows/Linux analogue of the macOS native NSPanel overlay: a
+/// transparent, frameless, always-on-top window that loads the backend-served
+/// HUD (`/jarvis-hud.html`) so its `/v1/*` calls are same-origin.
+#[cfg(not(target_os = "macos"))]
+fn toggle_hud_window(app: &tauri::AppHandle) {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+    if let Some(w) = app.get_webview_window("hud") {
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.hide();
+        } else {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_always_on_top(true);
+            let _ = w.set_focus();
+        }
+        return;
+    }
+
+    let url = format!("http://127.0.0.1:{JARVIS_PORT}/jarvis-hud.html");
+    if let Ok(parsed) = url.parse() {
+        // NOTE: intentionally NOT transparent. On Windows a transparent
+        // WebView2 window can composite as fully see-through (you get an
+        // "invisible" window even though IsWindowVisible reports true). The HUD
+        // paints its own near-black background, so a normal opaque + frameless
+        // + always-on-top window gives the overlay look and always renders.
+        if let Ok(win) = WebviewWindowBuilder::new(app, "hud", WebviewUrl::External(parsed))
+            .title("OPENJARVIS // HUD")
+            .inner_size(960.0, 760.0)
+            .min_inner_size(420.0, 420.0)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .center()
+            .build()
+        {
+            grant_hud_microphone(&win);
+        }
+    }
+}
+
+/// Auto-grant the WebView2 microphone permission for the HUD overlay. WebView2
+/// denies `getUserMedia` / SpeechRecognition by default unless the host app
+/// handles the PermissionRequested event — without this the mic is dead in the
+/// desktop app (a normal browser instead prompts the user, which is why it works
+/// there). Microphone only; all other permission kinds fall through to default.
+#[cfg(target_os = "windows")]
+fn grant_hud_microphone(win: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+    };
+    use webview2_com::PermissionRequestedEventHandler;
+
+    let _ = win.with_webview(|pw| unsafe {
+        if let Ok(core) = pw.controller().CoreWebView2() {
+            let mut token = Default::default();
+            let _ = core.add_PermissionRequested(
+                &PermissionRequestedEventHandler::create(Box::new(|_sender, args| {
+                    if let Some(args) = args {
+                        let mut kind = Default::default();
+                        args.PermissionKind(&mut kind)?;
+                        if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
+                            args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                        }
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            );
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn grant_hud_microphone(_win: &tauri::WebviewWindow) {}
 
 // ---------------------------------------------------------------------------
 // App entry point
@@ -2606,6 +2691,7 @@ pub fn run() {
         .setup(move |app| {
             // System tray
             let show = MenuItemBuilder::with_id("show", "Show / Hide").build(app)?;
+            let hud = MenuItemBuilder::with_id("hud", "Toggle JARVIS HUD").build(app)?;
             let health = MenuItemBuilder::with_id("health", "Health: starting...")
                 .enabled(false)
                 .build(app)?;
@@ -2613,6 +2699,7 @@ pub fn run() {
 
             let menu = MenuBuilder::new(app)
                 .item(&show)
+                .item(&hud)
                 .separator()
                 .item(&health)
                 .separator()
@@ -2634,6 +2721,14 @@ pub fn run() {
                             }
                         }
                     }
+                    "hud" => {
+                        #[cfg(target_os = "macos")]
+                        unsafe {
+                            native_overlay::toggle();
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        toggle_hud_window(app);
+                    }
                     "quit" => {
                         app.exit(0);
                     }
@@ -2647,22 +2742,39 @@ pub fn run() {
                 native_overlay::create(include_str!("overlay.html"), JARVIS_PORT);
             }
 
-            // Register Cmd+Shift+Space to toggle the overlay
+            // Register the overlay toggle shortcut:
+            //   macOS -> Cmd+Shift+Space (native NSPanel overlay)
+            //   else  -> Ctrl+Shift+Space (JARVIS HUD window)
             {
                 use tauri_plugin_global_shortcut::{
                     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
                 };
+                #[cfg(target_os = "macos")]
                 let sc = Shortcut::new(Some(Modifiers::META | Modifiers::SHIFT), Code::Space);
+                #[cfg(not(target_os = "macos"))]
+                let sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
                 if let Err(e) = app.global_shortcut().on_shortcut(sc, |_app, _sc, ev| {
                     if ev.state == ShortcutState::Pressed {
                         #[cfg(target_os = "macos")]
                         unsafe {
                             native_overlay::toggle();
                         }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            let a = _app.clone();
+                            let _ = _app.run_on_main_thread(move || toggle_hud_window(&a));
+                        }
                     }
                 }) {
-                    eprintln!("Warning: could not register Cmd+Shift+Space: {e}");
+                    eprintln!("Warning: could not register overlay shortcut: {e}");
                 }
+            }
+
+            // Grant the microphone permission on the MAIN window's WebView2 too,
+            // so the embedded JARVIS HUD <iframe> (allow="microphone") can use it.
+            #[cfg(target_os = "windows")]
+            if let Some(main) = app.get_webview_window("main") {
+                grant_hud_microphone(&main);
             }
 
             // Auto-start backend services on launch
