@@ -38,7 +38,7 @@ if (Listening 5173) { Write-Host "[ok]   frontend already on :5173" -ForegroundC
 else {
   Write-Host "[..]   starting frontend on :5173" -ForegroundColor Yellow
   Start-Process -WindowStyle Hidden -WorkingDirectory (Join-Path $clone "frontend") `
-    -FilePath "npm" -ArgumentList @("run","dev")
+    -FilePath "npm.cmd" -ArgumentList @("run","dev")
   WaitPort 5173 60 | Out-Null
 }
 
