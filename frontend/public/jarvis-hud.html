@@ -193,6 +193,7 @@
 
 <script src="jarvis-shaders.js"></script>
 <script src="jarvis-core.js"></script>
+<script src="jarvis-lights.js"></script>
 <script>
 //=================================================================
 //  CONFIG
@@ -208,7 +209,9 @@ const VOICE = 'bm_george';
 const SPEED = 1.05;                      // +5% speech rate (starting point)
 let   MODEL = 'qwen3.5:4b';
 const SYSTEM = "You are JARVIS, a refined British AI butler. Be concise, calm, "
-            + "and address the user as 'sir'. One or two sentences unless asked for more.";
+            + "and address the user as 'sir'. One or two sentences unless asked for more. "
+            + "You can control the user's Govee lights with the control_lights tool; "
+            + "call it whenever they ask to change the lights.";
 
 //=================================================================
 //  STATE
@@ -577,10 +580,11 @@ async function ask(text){
   let acc='', firstTok=0; t0=performance.now(); ntok=0;
   const subEl=$('subtitle');
   const myAbort = currentChatAbort = new AbortController();   // this turn's controller
+  const L=window.JarvisLights, calls=L ? L.collector() : null;   // control_lights tool calls
   try{
     const r=await fetch(API+'/v1/chat/completions',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:MODEL,messages,stream:true}),
+      body:JSON.stringify({model:MODEL,messages,stream:true,...(L?{tools:[L.TOOL]}:{})}),
       signal:myAbort.signal
     });
     if(!r.ok) throw new Error(r.status);
@@ -593,6 +597,7 @@ async function ask(text){
         if(!ln.startsWith('data: ')) continue;
         const p=ln.slice(6); if(p==='[DONE]') continue;
         try{ const j=JSON.parse(p);
+          if(calls) calls.add(j.choices?.[0]?.delta?.tool_calls);
           const c=j.choices?.[0]?.delta?.content;
           if(c){ if(!firstTok){firstTok=performance.now(); $('lat').textContent=Math.round(firstTok-t0)+'ms';}
             acc+=c; ntok++; feedTTS(c);
@@ -607,6 +612,13 @@ async function ask(text){
     if(!acc){ acc='I could not reach the engine, sir.'; feedTTS(acc); }
   }
   if(myAbort.signal.aborted) return;          // don't post-process / speak an interrupted turn
+  for(const c of (calls ? calls.lights() : [])){   // the model asked for the lights: do it, then say so
+    sub('lights…');
+    const said=await L.run(API, c.args);
+    if(myAbort.signal.aborted) return;
+    acc+=(acc?' ':'')+said; feedTTS((acc===said?'':' ')+said);
+    $('lat').textContent=Math.round(performance.now()-t0)+'ms▸lights';
+  }
   messages.push({role:'assistant',content:acc});
   subEl.innerHTML=esc(acc);
   endTTS();

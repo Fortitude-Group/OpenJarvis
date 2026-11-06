@@ -51,7 +51,7 @@ class AnswerRequest(BaseModel):
     allow: bool
 
 
-def _guard(request: Request, *, body: bool) -> None:
+def require_local_client(request: Request, *, body: bool) -> None:
     origin = request.headers.get("origin")
     if origin is not None and origin not in TRUSTED_ORIGINS:
         raise HTTPException(status_code=403, detail="origin not allowed")
@@ -72,7 +72,7 @@ router = APIRouter(prefix="/v1/act", tags=["act"])
 
 @router.post("")
 async def start_job(payload: ActRequest, request: Request) -> dict:
-    _guard(request, body=True)
+    require_local_client(request, body=True)
     try:
         job = _manager(request).start(
             payload.task.strip(), payload.context, payload.fresh
@@ -84,7 +84,7 @@ async def start_job(payload: ActRequest, request: Request) -> dict:
 
 @router.get("/{job_id}/events")
 async def job_events(job_id: str, request: Request) -> StreamingResponse:
-    _guard(request, body=False)
+    require_local_client(request, body=False)
     job = _manager(request).get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="no such job")
@@ -110,7 +110,7 @@ async def job_events(job_id: str, request: Request) -> StreamingResponse:
 
 @router.post("/{job_id}/answer")
 async def answer(job_id: str, payload: AnswerRequest, request: Request) -> dict:
-    _guard(request, body=True)
+    require_local_client(request, body=True)
     if not _manager(request).answer(job_id, payload.id, payload.allow):
         raise HTTPException(
             status_code=409, detail="job is not waiting on that question"
@@ -120,5 +120,5 @@ async def answer(job_id: str, payload: AnswerRequest, request: Request) -> dict:
 
 @router.post("/{job_id}/cancel")
 async def cancel(job_id: str, request: Request) -> dict:
-    _guard(request, body=False)
+    require_local_client(request, body=False)
     return {"ok": _manager(request).cancel(job_id)}

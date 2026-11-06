@@ -52,7 +52,7 @@ PASSTHROUGH_ENV = (
 )
 
 
-def _user_env_value(name: str) -> str:
+def user_env_value(name: str) -> str:
     if os.name != "nt":
         return ""
     try:
@@ -68,7 +68,7 @@ def runner_env() -> Dict[str, str]:
     env = dict(os.environ)
     for name in PASSTHROUGH_ENV:
         if not env.get(name):
-            value = _user_env_value(name)
+            value = user_env_value(name)
             if value:
                 env[name] = value
     return env
