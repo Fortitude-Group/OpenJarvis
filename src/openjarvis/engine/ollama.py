@@ -79,13 +79,31 @@ def _default_num_ctx() -> int:
         return 16384
 
 
+def _keep_alive() -> int | str:
+    """How long Ollama keeps the model in VRAM after a request.
+
+    Ollama's own default is 5 minutes, after which the next request pays a
+    10-15 s reload, which kills a voice conversation. Default to "forever"
+    (-1). Override with ``JARVIS_KEEP_ALIVE`` (e.g. "30m", or "0" to unload).
+    """
+    raw = os.environ.get("JARVIS_KEEP_ALIVE", "-1").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
 @EngineRegistry.register("ollama")
 class OllamaEngine(InferenceEngine):
     """Ollama backend via its native HTTP API."""
 
     engine_id = "ollama"
 
-    _DEFAULT_HOST = "http://localhost:11434"
+    # 127.0.0.1, not localhost: Ollama listens on IPv4 only, and on Windows
+    # every new connection to "localhost" tries ::1 first and takes ~2 s to
+    # fall back. Health checks during a stream open a new connection, so that
+    # froze replies for 2 s.
+    _DEFAULT_HOST = "http://127.0.0.1:11434"
 
     def __init__(
         self,
@@ -131,6 +149,7 @@ class OllamaEngine(InferenceEngine):
                 "num_predict": max_tokens,
                 "num_ctx": kwargs.get("num_ctx", _default_num_ctx()),
             },
+            "keep_alive": _keep_alive(),
         }
         # Disable extended thinking by default (Qwen3.5 etc.).
         # When enabled, thinking tokens consume the entire budget and
@@ -253,6 +272,7 @@ class OllamaEngine(InferenceEngine):
                 "num_predict": max_tokens,
                 "num_ctx": kwargs.get("num_ctx", _default_num_ctx()),
             },
+            "keep_alive": _keep_alive(),
         }
         # Mirror generate()'s default: disable extended thinking unless the
         # caller opted in. Qwen3/etc. with thinking on can stall the visible
@@ -332,6 +352,7 @@ class OllamaEngine(InferenceEngine):
                 "num_predict": max_tokens,
                 "num_ctx": kwargs.get("num_ctx", _default_num_ctx()),
             },
+            "keep_alive": _keep_alive(),
         }
         if "think" not in kwargs:
             payload["think"] = False

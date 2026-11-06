@@ -1088,7 +1088,9 @@ async def server_info(request: Request):
 async def health(request: Request):
     """Health check endpoint."""
     engine = request.app.state.engine
-    healthy = engine.health()
+    # engine.health() does blocking network I/O. Run it off the event loop so
+    # a health poll can never stall an in-flight streaming reply.
+    healthy = await asyncio.to_thread(engine.health)
     if not healthy:
         raise HTTPException(status_code=503, detail="Engine unhealthy")
     return {"status": "ok"}
