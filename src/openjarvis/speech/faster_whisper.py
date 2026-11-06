@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
+import glob
 import logging
 import os
+import sys
+import sysconfig
 import tempfile
 from typing import List, Optional
 
-from openjarvis.core.registry import SpeechRegistry
-from openjarvis.speech._stubs import Segment, SpeechBackend, TranscriptionResult
+
+def _register_cuda_dll_dirs() -> None:
+    """Let CTranslate2 find cuBLAS/cuDNN from the nvidia-*-cu12 pip wheels.
+
+    On Windows those wheels put their DLLs in site-packages/nvidia/*/bin, which
+    CTranslate2 never searches, so device="cuda" fails with "cublas64_12.dll
+    not found". Must run before ctranslate2 is imported.
+    """
+    if sys.platform != "win32":
+        return
+    site = sysconfig.get_paths()["purelib"]
+    for d in glob.glob(os.path.join(site, "nvidia", "*", "bin")):
+        try:
+            os.add_dll_directory(d)
+        except OSError:
+            continue
+        # CTranslate2 loads cuBLAS lazily with a plain LoadLibrary, which only
+        # searches PATH, so add it there too.
+        os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+
+
+_register_cuda_dll_dirs()
+
+from openjarvis.core.registry import SpeechRegistry  # noqa: E402
+from openjarvis.speech._stubs import (  # noqa: E402
+    Segment,
+    SpeechBackend,
+    TranscriptionResult,
+)
 
 try:
     from faster_whisper import WhisperModel

@@ -36,7 +36,7 @@ _backend = TTSRegistry.get("kokoro")()
 # Local STT via this clone's (Windows-fixed) faster-whisper backend, so the HUD
 # never depends on the separate :8000 backend (which lacks faster-whisper).
 _stt = SpeechRegistry.get("faster-whisper")(
-    model_size="base", device="cpu", compute_type="int8"
+    model_size="base", device="cuda", compute_type="float16"
 )
 
 
