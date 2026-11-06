@@ -97,6 +97,9 @@ desktop = [
     # ad-hoc-installed kokoro and /v1/speech/tts 500s ("No module named 'kokoro'").
     "kokoro>=0.9",
     "soundfile>=0.12",
+    # GPU speech-to-text on Windows (see speech-cuda below).
+    "nvidia-cublas-cu12>=12.4,<13; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12>=9.1,<10; sys_platform == 'win32'",
 ]
 openhands = ["openhands-sdk>=1.0; python_version >= '3.12'"]
 gpu-metrics = ["pynvml>=12.0"]
@@ -136,6 +139,14 @@ sandbox-wasm = ["wasmtime>=25"]
 sandbox-docker = ["docker>=7.0"]
 dashboard = ["textual>=0.80"]
 speech = ["faster-whisper>=1.0"]
+# cuBLAS + cuDNN wheels so faster-whisper (CTranslate2) can run on an NVIDIA
+# GPU on Windows. speech/faster_whisper.py adds their DLL folders to the
+# search path. Linux already gets these through torch.
+speech-cuda = [
+    "faster-whisper>=1.0",
+    "nvidia-cublas-cu12>=12.4,<13; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12>=9.1,<10; sys_platform == 'win32'",
+]
 speech-deepgram = ["deepgram-sdk>=3.0"]
 eval-wandb = ["wandb>=0.17"]
 eval-sheets = ["gspread>=6.0", "google-auth>=2.0"]
