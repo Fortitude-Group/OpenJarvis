@@ -16,6 +16,7 @@
     color:var(--cyan);-webkit-user-select:none;user-select:none;cursor:default}
   #stage{position:absolute;inset:0}
   #c{position:absolute;inset:0;width:100%;height:100%}  /* reactor only — NOT sidebar canvases */
+  #gl{position:absolute;inset:0;width:100%;height:100%;display:block}  /* GPU core, under #c */
 
   /* vignette + scanlines */
   #fx{position:absolute;inset:0;pointer-events:none;z-index:5}
@@ -117,7 +118,7 @@
 </style>
 </head>
 <body>
-<div id="stage"><canvas id="c"></canvas></div>
+<div id="stage"><canvas id="gl"></canvas><canvas id="c"></canvas></div>
 <div id="fx"></div>
 <div class="bracket tl"></div><div class="bracket tr"></div>
 <div class="bracket bl"></div><div class="bracket br"></div>
@@ -190,6 +191,7 @@
   </button>
 </div>
 
+<script src="jarvis-core.js"></script>
 <script>
 //=================================================================
 //  CONFIG
@@ -226,6 +228,7 @@ function setState(s){
   document.documentElement.style.setProperty('--cyan', col);
   $('dot').style.background = col;
   $('dot').style.boxShadow = '0 0 14px '+col;
+  if(window.JarvisCore) JarvisCore.setState(s);
 }
 
 //=================================================================
@@ -240,11 +243,20 @@ function resize(){ const w=cv.clientWidth||document.documentElement.clientWidth,
   W=cv.width=w*DPR; H=cv.height=h*DPR; }
 addEventListener('resize',resize); resize();
 
+// GPU core (jarvis-core.js) draws the plasma, particles and bloom underneath this
+// canvas. If WebGL2 isn't available, GPU stays false and the flat 2D core is drawn.
+const GPU = !!(window.JarvisCore && JarvisCore.init($('gl'), {
+  getAnalyser: () => analyser,
+  getLevel:    () => level,
+}));
+if(!GPU) $('gl').style.display='none';
+const GPU_ON = () => GPU && JarvisCore.active;
+
 function ring(cx,cy,r,opts){
   const {seg=0, gap=0, w=2, col='#39d8ff', a=1, dash=false, rot=0} = opts;
   ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot);
   ctx.strokeStyle=col; ctx.globalAlpha=a; ctx.lineWidth=w;
-  ctx.shadowColor=col; ctx.shadowBlur=12;
+  ctx.shadowColor=col; ctx.shadowBlur=GPU_ON()?6:12;
   if(seg>0){
     const step=(Math.PI*2)/seg, arc=step*(1-gap);
     for(let i=0;i<seg;i++){ ctx.beginPath();
@@ -297,7 +309,9 @@ function draw(){
   ring(cx,cy,base*1.55,{seg:6, gap:.5,  w:2, col, a:.5, rot:-t*0.5});
   ring(cx,cy,base*1.40,{seg:24,gap:.55, w:6, col, a:.25,rot:t*0.18});
 
-  // --- audio-reactive radial bars ---
+  const gpu=GPU_ON();
+  // --- audio-reactive radial bars (the GPU particles take this job when on) ---
+  if(!gpu){
   ctx.save(); ctx.translate(cx,cy);
   const N=96, rr=base*1.05;
   for(let i=0;i<N;i++){
@@ -314,6 +328,7 @@ function draw(){
     ctx.stroke();
   }
   ctx.restore();
+  }
 
   // --- inner reactor rings ---
   ring(cx,cy,base*0.92,{seg:3,gap:.18,w:5,col,a:.9,rot:-t*0.6});
@@ -327,8 +342,10 @@ function draw(){
   g.addColorStop(0.35,col);
   g.addColorStop(1,'rgba(57,216,255,0)');
   ctx.save(); ctx.globalAlpha=.9+level*0.1;
-  ctx.fillStyle=g; ctx.shadowColor=col; ctx.shadowBlur=40;
-  ctx.beginPath(); ctx.arc(cx,cy,cr,0,Math.PI*2); ctx.fill();
+  if(!gpu){   // the GPU draws a raymarched plasma core instead
+    ctx.fillStyle=g; ctx.shadowColor=col; ctx.shadowBlur=40;
+    ctx.beginPath(); ctx.arc(cx,cy,cr,0,Math.PI*2); ctx.fill();
+  }
   // triangle reactor motif
   ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.lineWidth=2; ctx.shadowBlur=18;
   ctx.beginPath();
@@ -430,6 +447,36 @@ function micUI(){
 //  • echoCancellation keeps his voice out of your recording; silence ends the turn.
 let micStream=null, micSource=null, micAnalyser=null, vadBuf=null, recorder=null, chunks=[], recording=false;
 let silenceTimer=null, sawSpeech=false, maxRecTimer=null;
+// STREAMING STT: the recording is transcribed WHILE you talk (live captions),
+// and again the instant you go quiet. By the time the pause is confirmed the
+// final text is already back, so the reply starts with no transcription wait.
+const SILENCE_MS=650;           // pause that ends your turn
+let flushWaiters=[], pre=null, liveBusy=false, lastLive=0;
+
+function flushAudio(){          // force out the latest slice, resolve with chunk count
+  return new Promise(res=>{
+    if(!recorder || recorder.state!=='recording') return res(chunks.length);
+    flushWaiters.push(res); try{ recorder.requestData(); }catch{ res(chunks.length); }
+  });
+}
+async function sttChunks(n){    // transcribe the first n chunks (a valid webm prefix)
+  const fd=new FormData();
+  fd.append('file',new Blob(chunks.slice(0,n),{type:recorder?.mimeType||'audio/webm'}),'speech.webm');
+  const r=await fetch(API+'/v1/speech/transcribe',{method:'POST',body:fd});
+  if(!r.ok) throw new Error('stt '+r.status);
+  return ((await r.json()).text||'').trim();
+}
+function preTranscribe(){       // you just went quiet: transcribe everything so far
+  const p={valid:true};
+  p.text=flushAudio().then(n=>sttChunks(n)).catch(()=>null);
+  pre=p;
+}
+async function liveCaption(){   // interim caption while you're still speaking
+  liveBusy=true; lastLive=performance.now();
+  try{ const n=await flushAudio(); const t=await sttChunks(n);
+       if(recording && t) sub('▸ '+t); }catch{}
+  liveBusy=false;
+}
 
 // RMS volume (0..1) from the mic — a reliable voice-activity measure.
 function micRMS(){
@@ -456,10 +503,14 @@ async function startRecording(){
   }
   analyser=micAnalyser; audioData=new Uint8Array(micAnalyser.frequencyBinCount);  // reactor reacts to your voice
   setState(ST.LISTENING); sub('listening…'); $('mic').classList.add('rec');
-  chunks=[]; recorder=new MediaRecorder(micStream);
-  recorder.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
+  chunks=[]; flushWaiters=[]; pre=null; liveBusy=false; lastLive=performance.now();
+  recorder=new MediaRecorder(micStream);
+  recorder.ondataavailable=e=>{
+    if(e.data.size) chunks.push(e.data);
+    const w=flushWaiters; flushWaiters=[]; w.forEach(f=>f(chunks.length));
+  };
   recorder.onstop=onRecordingStop;
-  recorder.start();
+  recorder.start(250);          // 250ms slices so we can transcribe while you talk
   monitorSilence();
   clearTimeout(maxRecTimer); maxRecTimer=setTimeout(stopRecording, 15000);   // hard cap
 }
@@ -485,8 +536,13 @@ function monitorSilence(){
     const speak=Math.max(0.020, floor*3.2);
     const quiet=Math.max(0.012, floor*1.8);
     if(e>speak) sawSpeech=true;
-    if(sawSpeech && e<quiet){ if(!silenceTimer) silenceTimer=setTimeout(stopRecording, 800); }
-    else if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; }
+    if(sawSpeech && e<quiet){
+      if(!silenceTimer){ silenceTimer=setTimeout(stopRecording, SILENCE_MS); preTranscribe(); }
+    } else if(silenceTimer){                 // you carried on talking: that guess is stale
+      clearTimeout(silenceTimer); silenceTimer=null; if(pre) pre.valid=false;
+    } else if(sawSpeech && !liveBusy && performance.now()-lastLive>1100){
+      liveCaption();
+    }
     requestAnimationFrame(tick);
   })();
 }
@@ -494,13 +550,14 @@ async function onRecordingStop(){
   $('mic').classList.remove('rec'); detach();
   const blob=new Blob(chunks,{type:'audio/webm'});
   if(blob.size<1800){ setState(ST.IDLE); sub(''); return; }   // too short to be speech
-  setState(ST.THINKING); sub('transcribing…');
+  setState(ST.THINKING);
+  const early=pre; pre=null;
   try{
-    const fd=new FormData(); fd.append('file',blob,'speech.webm');
-    const r=await fetch(API+'/v1/speech/transcribe',{method:'POST',body:fd});
-    if(!r.ok) throw new Error('stt '+r.status);
-    const d=await r.json();
-    const text=(d.text||'').trim().replace(/^\s*jarvis[\s,.:!-]*/i,''); // drop a leading "Jarvis,"
+    // Use the transcript started when you went quiet (only silence since);
+    // fall back to transcribing the whole clip if that failed or went stale.
+    let raw = early && early.valid ? await early.text : null;
+    if(raw===null){ sub('transcribing…'); raw=await sttChunks(chunks.length); }
+    const text=raw.trim().replace(/^\s*jarvis[\s,.:!-]*/i,''); // drop a leading "Jarvis,"
     if(text){ sub('“'+text+'”'); ask(text); }
     else { setState(ST.IDLE); sub('(didn’t catch that, sir)'); setTimeout(()=>{ if(state===ST.IDLE && !recording) sub(''); },1800); }
   }catch(e){ setState(ST.IDLE); flash('speech transcription failed'); }
