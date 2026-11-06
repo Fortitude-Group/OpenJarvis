@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from openjarvis.server.act_routes import router as act_router
 from openjarvis.server.analytics_routes import router as analytics_router
 from openjarvis.server.api_routes import include_all_routes
 from openjarvis.server.comparison import comparison_router
@@ -314,6 +315,7 @@ def create_app(
     app.include_router(upload_router)
     app.include_router(research_router)
     app.include_router(analytics_router)
+    app.include_router(act_router)
     include_all_routes(app)
 
     # Restore SendBlue channel bindings from database on startup

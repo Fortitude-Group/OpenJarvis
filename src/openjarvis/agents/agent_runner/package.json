@@ -1,0 +1,11 @@
+{
+  "name": "openjarvis-agent-runner",
+  "private": true,
+  "type": "module",
+  "description": "Runs Jarvis 'do it' tasks through the Claude Agent SDK. Copied to ~/.openjarvis/agent_runner and npm-installed there.",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.318",
+    "@playwright/mcp": "0.0.84",
+    "zod": "^4.1.0"
+  }
+}
