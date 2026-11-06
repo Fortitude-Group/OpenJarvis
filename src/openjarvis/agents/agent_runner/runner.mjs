@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { createDesktopServer } from "./desktop.mjs";
+import { createGoveeServer } from "./govee.mjs";
 import { SYSTEM_APPEND, needsConfirmation, stepLabel } from "./policy.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -67,6 +68,7 @@ async function run(req) {
     mcpServers: {
       jarvis: jarvisServer,
       desktop: desktop.server,
+      govee: createGoveeServer(),
       browser: {
         type: "stdio",
         command: process.execPath,

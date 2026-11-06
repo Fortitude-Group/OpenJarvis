@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -35,11 +36,42 @@ RUNNER_FILES = (
     "desktop.mjs",
     "policy.mjs",
     "desktop.ps1",
+    "govee.mjs",
 )
 # A follow-up within this window carries on the previous agent session, so
 # "now add it to the basket" knows what "it" is.
 RESUME_WINDOW_S = 15 * 60
 TERMINAL = {"done", "error"}
+# Keys the runner's tools need. They are often set with setx after the backend
+# started, so a missing one is read from the user's registry environment.
+PASSTHROUGH_ENV = (
+    "ANTHROPIC_API_KEY",
+    "GOVEE_API_KEY",
+    "GOVEE_DEVICE",
+    "JARVIS_ACT_MODEL",
+)
+
+
+def _user_env_value(name: str) -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            return str(winreg.QueryValueEx(key, name)[0])
+    except OSError:
+        return ""
+
+
+def runner_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    for name in PASSTHROUGH_ENV:
+        if not env.get(name):
+            value = _user_env_value(name)
+            if value:
+                env[name] = value
+    return env
 
 
 def ensure_runner(dest: Optional[Path] = None) -> Path:
@@ -163,6 +195,7 @@ class ActJobManager:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                env=runner_env(),
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except Exception as exc:  # node missing, npm install failed, ...

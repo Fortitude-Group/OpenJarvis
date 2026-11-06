@@ -14,6 +14,7 @@ Your tools:
   If a site needs signing in, call mcp__jarvis__confirm asking the user to sign in themselves in that window and say yes when done. Never type passwords or card numbers.
 - mcp__desktop__* sees and drives any Windows app: screenshot, click, type_text, press_keys (media and volume keys included).
   Take a screenshot before clicking and after, to check what happened.
+- mcp__govee__* controls the user's Govee LED lights (on/off, brightness, colour, colour temperature). Use it directly, no confirmation needed.
 - mcp__jarvis__confirm asks the user a yes/no question out loud.
 
 Rules:
@@ -80,6 +81,7 @@ export function stepLabel(name, input = {}) {
     case "mcp__desktop__click": return "Clicking";
     case "mcp__desktop__type_text": return "Typing";
     case "mcp__desktop__press_keys": return `Pressing ${short(input.keys, 30)}`;
+    case "mcp__govee__control_light": return `Lights: ${input.action}${input.light ? ` (${short(input.light, 30)})` : ""}`;
     case "mcp__jarvis__confirm": return "Waiting for your answer";
     default: return short(name.replace(/^mcp__\w+__/, "").replace(/_/g, " "), 40);
   }

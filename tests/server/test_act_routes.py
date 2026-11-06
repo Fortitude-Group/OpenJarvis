@@ -165,3 +165,16 @@ def test_task_length_is_validated():
     client, _ = _client()
     assert client.post("/v1/act", json={"task": ""}).status_code == 422
     assert client.post("/v1/act", json={"task": "x" * 5000}).status_code == 422
+
+
+def test_runner_env_fills_missing_keys_from_user_environment(monkeypatch):
+    from openjarvis.server import act_jobs
+
+    monkeypatch.delenv("GOVEE_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-process")
+    stored = {"GOVEE_API_KEY": "from-registry", "ANTHROPIC_API_KEY": "stale"}
+    monkeypatch.setattr(act_jobs, "_user_env_value", lambda n: stored.get(n, ""))
+    env = act_jobs.runner_env()
+    assert env["GOVEE_API_KEY"] == "from-registry"
+    assert env["ANTHROPIC_API_KEY"] == "from-process"
+    assert "GOVEE_DEVICE" not in env or env["GOVEE_DEVICE"]
