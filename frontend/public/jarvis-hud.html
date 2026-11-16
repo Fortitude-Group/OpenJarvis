@@ -466,7 +466,8 @@ function flushAudio(){          // force out the latest slice, resolve with chun
 async function sttChunks(n){    // transcribe the first n chunks (a valid webm prefix)
   const fd=new FormData();
   fd.append('file',new Blob(chunks.slice(0,n),{type:recorder?.mimeType||'audio/webm'}),'speech.webm');
-  const r=await fetch(API+'/v1/speech/transcribe',{method:'POST',body:fd});
+  // Time out rather than hang on a stuck backend (a cold model load is ~10s).
+  const r=await fetch(API+'/v1/speech/transcribe',{method:'POST',body:fd,signal:AbortSignal.timeout(30000)});
   if(!r.ok) throw new Error('stt '+r.status);
   return ((await r.json()).text||'').trim();
 }
@@ -564,7 +565,14 @@ async function onRecordingStop(){
     const text=raw.trim().replace(/^\s*jarvis[\s,.:!-]*/i,''); // drop a leading "Jarvis,"
     if(text){ sub('“'+text+'”'); ask(text); }
     else { setState(ST.IDLE); sub('(didn’t catch that, sir)'); setTimeout(()=>{ if(state===ST.IDLE && !recording) sub(''); },1800); }
-  }catch(e){ setState(ST.IDLE); flash('speech transcription failed'); }
+  }catch(e){
+    // Say so in the caption: leaving "transcribing..." up looks like a hang.
+    const offline=$('r-stat').textContent==='OFFLINE';
+    setState(ST.IDLE);
+    flash(offline?'backend offline':'speech transcription failed');
+    sub(offline?'(backend offline, sir)':'(transcription failed, sir)');
+    setTimeout(()=>{ if(state===ST.IDLE && !recording) sub(''); },6000);
+  }
 }
 
 //=================================================================
